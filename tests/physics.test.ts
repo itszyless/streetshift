@@ -1,0 +1,15 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {stepCar,type Vehicle} from '../src/physics.ts';
+import {demoWorld,closest,blocked,toGeo,toLocal,parseRoads,type World} from '../src/world.ts';
+const empty=():World=>({...demoWorld(),buildings:[],radius:10000});
+const car=():Vehicle=>({x:0,y:0,angle:0,speed:0,color:'lime'});
+test('acceleration, capped speed and braking work at fixed time steps',()=>{const c=car(),w=empty();for(let i=0;i<1200;i++)stepCar(c,{throttle:1,steer:0,brake:false},1/120,w);assert.ok(c.speed>30&&c.speed<=40);const before=c.speed;for(let i=0;i<120;i++)stepCar(c,{throttle:0,steer:0,brake:true},1/120,w);assert.ok(c.speed<before*.05);assert.ok(c.y<0);});
+test('building collisions keep the car outside a building',()=>{const c=car(),w=empty();w.buildings=[{color:'gray',points:[{x:-10,y:-20},{x:10,y:-20},{x:10,y:-30},{x:-10,y:-30}]}];let impact=0;for(let i=0;i<240;i++)impact=Math.max(impact,stepCar(c,{throttle:1,steer:0,brake:false},1/120,w));assert.ok(impact>0);assert.ok(c.y> -20);assert.equal(blocked(c,w),false);});
+test('physics produces the same trajectory at different frame groupings',()=>{const a=car(),b=car(),w=empty();for(let i=0;i<600;i++)stepCar(a,{throttle:1,steer:.2,brake:false},1/120,w);for(let frame=0;frame<150;frame++)for(let j=0;j<4;j++)stepCar(b,{throttle:1,steer:.2,brake:false},1/120,w);assert.deepEqual(a,b);});
+test('road projection handles endpoints and zero length ways',()=>{assert.deepEqual(closest({x:30,y:5},{a:{x:0,y:0},b:{x:10,y:0},width:6}),{x:10,y:0});assert.deepEqual(closest({x:4,y:7},{a:{x:0,y:0},b:{x:0,y:0},width:6}),{x:0,y:0});});
+test('geographic conversion round trips at different latitudes',()=>{for(const lat of [-60,0,48,78]){const origin={lat,lng:16},p={x:240,y:-130};const g=toGeo(p,origin),q=toLocal(g.lat,g.lng,origin);assert.ok(Math.hypot(q.x-p.x,q.y-p.y)<1e-6);}});
+test('OSM parser skips walking paths and rejects empty road data',()=>{const origin={lat:48,lng:16};const w=parseRoads([{type:'way',tags:{highway:'residential'},geometry:[{lat:48,lon:16},{lat:48.001,lon:16}]},{type:'way',tags:{highway:'footway'},geometry:[{lat:48,lon:16},{lat:48.001,lon:16}]}],origin,'Test');assert.equal(w.roads.length,1);assert.throws(()=>parseRoads([],origin,'Ocean'),/No drivable streets/);});
+test('indexed collision detects buildings across grid-cell boundaries',()=>{const w=empty();w.buildings=[{color:'gray',points:[{x:63,y:0},{x:70,y:0},{x:70,y:10},{x:63,y:10}]}];assert.equal(blocked({x:61.5,y:5},w,2),true);assert.equal(blocked({x:60,y:5},w,2),false);assert.equal(blocked({x:66,y:5},w),true);});
+test('included real Vienna extract has drivable streets and a collision-free spawn candidate',()=>{const data=JSON.parse(readFileSync(new URL('../public/data/vienna.json',import.meta.url),'utf8').replace(/^\uFEFF/,''));const w=parseRoads(data.elements,{lat:48.2082,lng:16.3738},'Vienna');w.radius=380;assert.ok(w.roads.length>50);assert.ok(w.buildings.length>100);assert.ok(w.roads.some(r=>!blocked(closest({x:0,y:0},r),w,3)));});
